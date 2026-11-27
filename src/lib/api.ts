@@ -452,6 +452,9 @@ export const api = {
   openExternalUrl: (url: string) => invoke<void>("open_external_url", { url }),
   keepAliveMouseNudge: (force = true) =>
     invoke<MouseNudgeResult>("keep_alive_mouse_nudge", { force }),
+  enterBreakLockWindow: () => invoke<void>("enter_break_lock_window"),
+  exitBreakLockWindow: () => invoke<void>("exit_break_lock_window"),
+  lockWindowsWorkstation: () => invoke<void>("lock_windows_workstation"),
 };
 
 export async function wtCall<T = unknown>(

@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Coffee, Pause, Play, Square, Timer } from "lucide-react";
+import {
+  Check,
+  Coffee,
+  Lock,
+  Pause,
+  Play,
+  RotateCcw,
+  ShieldAlert,
+  Square,
+  Timer,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAppStore } from "../store/appStore";
-import { type BreakReminderMins, useFocusStore } from "../store/runtimeStore";
+import { useFocusStore } from "../store/runtimeStore";
 
 function playFocusBeep() {
   try {
@@ -26,6 +36,13 @@ function playFocusBeep() {
   }
 }
 
+function formatMmSs(totalSecs: number): string {
+  const safe = Math.max(0, Math.floor(totalSecs));
+  const m = String(Math.floor(safe / 60)).padStart(2, "0");
+  const s = String(safe % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
 const FOCUS_PRESETS = [
   { mins: 25, label: "25 分钟", desc: "深度专注" },
   { mins: 45, label: "45 分钟", desc: "编码冲刺" },
@@ -39,18 +56,30 @@ export function FocusTimerPill() {
   const focusSecondsLeft = useFocusStore((s) => s.focusSecondsLeft);
   const focusRunning = useFocusStore((s) => s.focusRunning);
   const breakReminderMins = useFocusStore((s) => s.breakReminderMins);
+  const breakDurationMins = useFocusStore((s) => s.breakDurationMins);
+  const breakLockEnabled = useFocusStore((s) => s.breakLockEnabled);
+  const breakStrictMode = useFocusStore((s) => s.breakStrictMode);
+  const breakNextDueAt = useFocusStore((s) => s.breakNextDueAt);
+  const breakPaused = useFocusStore((s) => s.breakPaused);
+  const breakPausedRemainMs = useFocusStore((s) => s.breakPausedRemainMs);
+  const breakActive = useFocusStore((s) => s.breakActive);
+
   const startFocus = useFocusStore((s) => s.startFocus);
   const pauseFocus = useFocusStore((s) => s.pauseFocus);
   const resumeFocus = useFocusStore((s) => s.resumeFocus);
   const stopFocus = useFocusStore((s) => s.stopFocus);
   const tickFocus = useFocusStore((s) => s.tickFocus);
-  const setBreakReminderMins = useFocusStore((s) => s.setBreakReminderMins);
+  const setBreakConfig = useFocusStore((s) => s.setBreakConfig);
+  const toggleBreakPaused = useFocusStore((s) => s.toggleBreakPaused);
+  const resetBreakTimer = useFocusStore((s) => s.resetBreakTimer);
+  const triggerBreakNow = useFocusStore((s) => s.triggerBreakNow);
   const incrementTodoPomodoro = useAppStore((s) => s.incrementTodoPomodoro);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [customTitle, setCustomTitle] = useState("");
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const boxRef = useRef<HTMLDivElement>(null);
-  const lastBreakAtRef = useRef<number>(Date.now());
+  const warnedDueAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -82,27 +111,74 @@ export function FocusTimerPill() {
     return () => window.clearInterval(timer);
   }, [focusRunning, tickFocus, incrementTodoPomodoro]);
 
-  // Lightweight 60s check for eye/stretch break reminder when enabled
+  // Break-lock scheduler: 60s pre-warning + auto trigger fullscreen lock (or toast)
   useEffect(() => {
-    lastBreakAtRef.current = Date.now();
-    if (!breakReminderMins) return;
-    const interval = window.setInterval(() => {
-      const elapsedMins = (Date.now() - lastBreakAtRef.current) / 60_000;
-      if (elapsedMins >= breakReminderMins) {
-        lastBreakAtRef.current = Date.now();
-        toast.info(`👀 已连续工作 ${breakReminderMins} 分钟，起来喝口水、远眺 20 秒吧`, {
-          duration: 10000,
-          action: {
-            label: "休息 5 分钟",
-            onClick: () => {
-              useFocusStore.getState().startFocus(null, "护眼休息", 5);
+    if (breakReminderMins <= 0 || breakPaused || breakActive) return;
+
+    const timer = window.setInterval(() => {
+      const st = useFocusStore.getState();
+      if (st.breakReminderMins <= 0 || st.breakPaused || st.breakActive) return;
+      const now = Date.now();
+      setNowMs(now);
+      const dueAt = st.breakNextDueAt;
+      if (!dueAt) return;
+      const remainMs = dueAt - now;
+
+      if (
+        remainMs > 0 &&
+        remainMs <= 60_000 &&
+        st.breakReminderMins >= 2 &&
+        warnedDueAtRef.current !== dueAt
+      ) {
+        warnedDueAtRef.current = dueAt;
+        toast.warning(
+          st.breakLockEnabled
+            ? "⏳ 1 分钟后将进入全屏强制休息锁屏，请及时保存当前操作"
+            : "⏳ 再过 1 分钟将提醒休息",
+          {
+            duration: 12000,
+            action: {
+              label: "推迟 5 分钟",
+              onClick: () => {
+                useFocusStore.getState().snoozeBreak(5);
+                toast.info("已顺延 5 分钟后提醒休息");
+              },
             },
           },
-        });
+        );
       }
-    }, 60_000);
-    return () => window.clearInterval(interval);
-  }, [breakReminderMins]);
+
+      if (remainMs <= 0) {
+        warnedDueAtRef.current = null;
+        if (st.breakLockEnabled) {
+          st.triggerBreakNow();
+        } else {
+          st.resetBreakTimer();
+          toast.info(`👀 已连续工作 ${st.breakReminderMins} 分钟，起来喝口水、远眺放松吧`, {
+            duration: 10000,
+            action: {
+              label: `休息 ${st.breakDurationMins} 分钟`,
+              onClick: () => {
+                useFocusStore.getState().triggerBreakNow();
+              },
+            },
+          });
+        }
+      }
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [breakReminderMins, breakPaused, breakActive]);
+
+  const remainMs =
+    breakReminderMins <= 0
+      ? 0
+      : breakPaused
+        ? breakPausedRemainMs
+        : Math.max(0, (breakNextDueAt ?? nowMs) - nowMs);
+  const remainSecs = Math.ceil(remainMs / 1000);
+  const remainMinsBadge = Math.max(1, Math.ceil(remainSecs / 60));
+  const isAlmostDue = breakReminderMins > 0 && !breakPaused && remainSecs <= 60;
 
   if (focusTitle || focusSecondsLeft > 0) {
     return (
@@ -156,25 +232,51 @@ export function FocusTimerPill() {
     <div ref={boxRef} className="relative shrink-0">
       <button
         type="button"
-        onClick={() => setMenuOpen((o) => !o)}
-        title="开启专注番茄钟 / 设置久坐护眼提醒"
-        className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+        onClick={() => {
+          setNowMs(Date.now());
+          setMenuOpen((o) => !o);
+        }}
+        title={
           breakReminderMins > 0
-            ? "border-emerald-200 bg-emerald-50/70 text-emerald-700 hover:bg-emerald-100/70"
-            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            ? `定时${breakLockEnabled ? "强制休息锁屏" : "护眼提醒"}：每 ${breakReminderMins} 分钟（${
+                breakPaused ? "已暂停" : `剩余 ${formatMmSs(remainSecs)}`
+              }），点击管理或立即休息`
+            : "开启专注番茄钟 / 设置定时休息锁屏"
+        }
+        className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+          breakReminderMins <= 0
+            ? "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            : isAlmostDue
+              ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+              : breakPaused
+                ? "border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                : "border-emerald-200 bg-emerald-50/70 text-emerald-700 hover:bg-emerald-100/70"
         }`}
       >
-        <Timer className="h-3.5 w-3.5 shrink-0 text-rose-500" aria-hidden="true" />
+        <Timer
+          className={`h-3.5 w-3.5 shrink-0 ${
+            breakReminderMins > 0 && !breakPaused ? "text-emerald-600" : "text-rose-500"
+          }`}
+          aria-hidden="true"
+        />
         <span className="hidden @[1040px]:inline">专注</span>
         {breakReminderMins > 0 && (
-          <span className="rounded bg-emerald-100 px-1 py-0 text-[10px] font-semibold text-emerald-700">
-            {breakReminderMins}m
+          <span
+            className={`lw-nums rounded px-1 py-0 text-[10px] font-semibold ${
+              isAlmostDue
+                ? "bg-amber-200/80 text-amber-900"
+                : breakPaused
+                  ? "bg-slate-200 text-slate-600"
+                  : "bg-emerald-100 text-emerald-700"
+            }`}
+          >
+            {breakPaused ? "暂停" : `${remainMinsBadge}m`}
           </span>
         )}
       </button>
 
       {menuOpen && (
-        <div className="absolute right-0 z-40 mt-1.5 w-64 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+        <div className="absolute right-0 z-40 mt-1.5 w-76 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-xl">
           <div className="text-xs font-semibold text-slate-900">快速开启专注计时</div>
           <input
             type="text"
@@ -202,20 +304,59 @@ export function FocusTimerPill() {
           </div>
 
           <div className="mt-3 border-t border-slate-100 pt-2.5">
-            <div className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
-              <Coffee className="h-3.5 w-3.5 text-emerald-600" />
-              <span>久坐 / 护眼提醒</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-800">
+                <Coffee className="h-3.5 w-3.5 text-emerald-600" />
+                <span>强制定时休息锁屏</span>
+              </div>
+              {breakReminderMins > 0 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNowMs(Date.now());
+                      toggleBreakPaused();
+                    }}
+                    title={breakPaused ? "继续倒计时" : "暂停倒计时"}
+                    className="rounded border border-slate-200 p-1 text-slate-600 hover:bg-slate-100"
+                  >
+                    {breakPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNowMs(Date.now());
+                      resetBreakTimer();
+                      toast.info(`已重置为 ${breakReminderMins} 分钟后提醒休息`);
+                    }}
+                    title="重新开始计时"
+                    className="rounded border border-slate-200 p-1 text-slate-600 hover:bg-slate-100"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
             </div>
-            <div className="mt-1.5 grid grid-cols-3 gap-1">
-              {([0, 45, 60] as BreakReminderMins[]).map((m) => (
+
+            {breakReminderMins > 0 && (
+              <div className="lw-nums mt-1.5 flex items-center justify-between rounded-lg bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
+                <span>{breakPaused ? "计时已暂停" : "距下次休息锁屏"}</span>
+                <span className="font-mono font-semibold text-emerald-700">
+                  {formatMmSs(remainSecs)}
+                </span>
+              </div>
+            )}
+
+            <div className="mt-2 grid grid-cols-4 gap-1">
+              {[0, 30, 45, 60].map((m) => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => {
-                    setBreakReminderMins(m);
-                    lastBreakAtRef.current = Date.now();
+                    setNowMs(Date.now());
+                    setBreakConfig({ breakReminderMins: m });
                     toast.success(
-                      m === 0 ? "已关闭久坐护眼提醒" : `已开启每 ${m} 分钟护眼提醒`,
+                      m === 0 ? "已关闭定时休息锁屏" : `已设置每 ${m} 分钟自动提示休息`,
                     );
                   }}
                   className={`rounded-lg py-1 text-[11px] font-medium transition ${
@@ -224,10 +365,81 @@ export function FocusTimerPill() {
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   }`}
                 >
-                  {m === 0 ? "关闭" : `每 ${m} 分`}
+                  {m === 0 ? "关闭" : `${m}分`}
                 </button>
               ))}
             </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+              <label className="flex items-center justify-between gap-1 rounded-lg border border-slate-200/80 px-2 py-1">
+                <span>工作间隔(分)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={240}
+                  value={breakReminderMins}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (Number.isFinite(val)) {
+                      setNowMs(Date.now());
+                      setBreakConfig({ breakReminderMins: val });
+                    }
+                  }}
+                  className="w-12 rounded border border-slate-200 px-1 py-0.5 text-right font-mono text-slate-800 focus:border-blue-500 focus:outline-none"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-1 rounded-lg border border-slate-200/80 px-2 py-1">
+                <span>休息时长(分)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={breakDurationMins}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (Number.isFinite(val) && val > 0) {
+                      setBreakConfig({ breakDurationMins: val });
+                    }
+                  }}
+                  className="w-12 rounded border border-slate-200 px-1 py-0.5 text-right font-mono text-slate-800 focus:border-blue-500 focus:outline-none"
+                />
+              </label>
+            </div>
+
+            <div className="mt-2 space-y-1 text-[11px] text-slate-600">
+              <label className="flex cursor-pointer items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={breakLockEnabled}
+                  onChange={(e) => setBreakConfig({ breakLockEnabled: e.target.checked })}
+                  className="rounded border-slate-300 text-emerald-600"
+                />
+                <Lock className="h-3 w-3 text-teal-600" />
+                <span>到期自动置顶全屏锁屏</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={breakStrictMode}
+                  onChange={(e) => setBreakConfig({ breakStrictMode: e.target.checked })}
+                  className="rounded border-slate-300 text-emerald-600"
+                />
+                <ShieldAlert className="h-3 w-3 text-rose-500" />
+                <span>强制模式（长按 3 秒才可跳过）</span>
+              </label>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                triggerBreakNow();
+              }}
+              className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-teal-600 py-1.5 text-[11px] font-medium text-white transition hover:bg-teal-700"
+            >
+              <Lock className="h-3 w-3" />
+              <span>立即进入休息锁屏（预览）</span>
+            </button>
           </div>
         </div>
       )}

@@ -8,8 +8,94 @@ import { getConst } from "../lib/wtx";
 const MAX_LOGS = 800;
 const FLUSH_INTERVAL_MS = 100;
 const BREAK_REMINDER_STORAGE_KEY = "lw.breakReminderMins";
+const BREAK_CONFIG_STORAGE_KEY = "lw.breakLockConfig.v1";
+const BREAK_COMPLETED_STORAGE_KEY = "lw.breakCompletedToday.v1";
 
-export type BreakReminderMins = 0 | 45 | 60;
+export type BreakReminderMins = number;
+
+export interface BreakLockConfig {
+  breakReminderMins: number;
+  breakDurationMins: number;
+  breakLockEnabled: boolean;
+  breakStrictMode: boolean;
+}
+
+const DEFAULT_BREAK_CONFIG: BreakLockConfig = {
+  breakReminderMins: 45,
+  breakDurationMins: 5,
+  breakLockEnabled: true,
+  breakStrictMode: true,
+};
+
+function clampReminderMins(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.max(1, Math.min(240, Math.round(v)));
+}
+
+function clampDurationMins(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 5;
+  return Math.max(1, Math.min(30, Math.round(v)));
+}
+
+function loadBreakConfig(): BreakLockConfig {
+  try {
+    const raw = window.localStorage.getItem(BREAK_CONFIG_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<BreakLockConfig>;
+      return {
+        breakReminderMins:
+          typeof parsed.breakReminderMins === "number"
+            ? clampReminderMins(parsed.breakReminderMins)
+            : DEFAULT_BREAK_CONFIG.breakReminderMins,
+        breakDurationMins:
+          typeof parsed.breakDurationMins === "number"
+            ? clampDurationMins(parsed.breakDurationMins)
+            : DEFAULT_BREAK_CONFIG.breakDurationMins,
+        breakLockEnabled:
+          typeof parsed.breakLockEnabled === "boolean"
+            ? parsed.breakLockEnabled
+            : DEFAULT_BREAK_CONFIG.breakLockEnabled,
+        breakStrictMode:
+          typeof parsed.breakStrictMode === "boolean"
+            ? parsed.breakStrictMode
+            : DEFAULT_BREAK_CONFIG.breakStrictMode,
+      };
+    }
+    const legacyRaw = Number(window.localStorage.getItem(BREAK_REMINDER_STORAGE_KEY) || "0");
+    if (legacyRaw > 0) {
+      return {
+        ...DEFAULT_BREAK_CONFIG,
+        breakReminderMins: clampReminderMins(legacyRaw),
+      };
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return { ...DEFAULT_BREAK_CONFIG };
+}
+
+function saveBreakConfig(cfg: BreakLockConfig) {
+  try {
+    window.localStorage.setItem(BREAK_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
+    window.localStorage.setItem(BREAK_REMINDER_STORAGE_KEY, String(cfg.breakReminderMins));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function loadBreakCompletedToday(): number {
+  try {
+    const raw = window.localStorage.getItem(BREAK_COMPLETED_STORAGE_KEY);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw) as { date?: string; count?: number };
+    if (parsed.date === todayYmd() && typeof parsed.count === "number" && parsed.count >= 0) {
+      return Math.floor(parsed.count);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return 0;
+}
 
 function nowTimeStr(): string {
   const d = new Date();
@@ -18,14 +104,15 @@ function nowTimeStr(): string {
     .join(":");
 }
 
-function loadBreakReminder(): BreakReminderMins {
+function saveBreakCompletedToday(count: number) {
   try {
-    const raw = Number(window.localStorage.getItem(BREAK_REMINDER_STORAGE_KEY) || "0");
-    if (raw === 45 || raw === 60) return raw;
+    window.localStorage.setItem(
+      BREAK_COMPLETED_STORAGE_KEY,
+      JSON.stringify({ date: todayYmd(), count }),
+    );
   } catch {
     // Ignore storage errors
   }
-  return 0;
 }
 
 interface LogState {
@@ -94,6 +181,16 @@ interface FocusState {
   focusTotalSeconds: number;
   focusRunning: boolean;
   breakReminderMins: BreakReminderMins;
+  breakDurationMins: number;
+  breakLockEnabled: boolean;
+  breakStrictMode: boolean;
+  breakNextDueAt: number | null;
+  breakPaused: boolean;
+  breakPausedRemainMs: number;
+  breakActive: boolean;
+  breakSecondsLeft: number;
+  breakTotalSeconds: number;
+  breakCompletedToday: number;
 
   startFocus: (todoId: string | null, title: string, minutes?: number) => void;
   pauseFocus: () => void;
@@ -101,7 +198,19 @@ interface FocusState {
   stopFocus: () => void;
   tickFocus: () => boolean;
   setBreakReminderMins: (mins: BreakReminderMins) => void;
+  setBreakConfig: (patch: Partial<BreakLockConfig>) => void;
+  toggleBreakPaused: () => void;
+  resetBreakTimer: () => void;
+  triggerBreakNow: (customSeconds?: number) => void;
+  snoozeBreak: (mins?: number) => void;
+  finishBreak: (completed: boolean) => void;
+  tickBreak: () => boolean;
 }
+
+const initBreakCfg: BreakLockConfig =
+  typeof window !== "undefined" ? loadBreakConfig() : { ...DEFAULT_BREAK_CONFIG };
+const initCompletedToday =
+  typeof window !== "undefined" ? loadBreakCompletedToday() : 0;
 
 export const useFocusStore = create<FocusState>((set, get) => ({
   focusTodoId: null,
@@ -109,7 +218,20 @@ export const useFocusStore = create<FocusState>((set, get) => ({
   focusSecondsLeft: 0,
   focusTotalSeconds: 1500,
   focusRunning: false,
-  breakReminderMins: typeof window !== "undefined" ? loadBreakReminder() : 0,
+  breakReminderMins: initBreakCfg.breakReminderMins,
+  breakDurationMins: initBreakCfg.breakDurationMins,
+  breakLockEnabled: initBreakCfg.breakLockEnabled,
+  breakStrictMode: initBreakCfg.breakStrictMode,
+  breakNextDueAt:
+    initBreakCfg.breakReminderMins > 0
+      ? Date.now() + initBreakCfg.breakReminderMins * 60_000
+      : null,
+  breakPaused: false,
+  breakPausedRemainMs: 0,
+  breakActive: false,
+  breakSecondsLeft: 0,
+  breakTotalSeconds: initBreakCfg.breakDurationMins * 60,
+  breakCompletedToday: initCompletedToday,
 
   startFocus: (todoId, title, minutes = 25) => {
     const total = Math.max(60, Math.round(minutes * 60));
@@ -150,12 +272,124 @@ export const useFocusStore = create<FocusState>((set, get) => ({
   },
 
   setBreakReminderMins: (mins) => {
-    try {
-      window.localStorage.setItem(BREAK_REMINDER_STORAGE_KEY, String(mins));
-    } catch {
-      // Ignore storage errors
+    get().setBreakConfig({ breakReminderMins: mins });
+  },
+
+  setBreakConfig: (patch) => {
+    const s = get();
+    const next: BreakLockConfig = {
+      breakReminderMins:
+        patch.breakReminderMins !== undefined
+          ? clampReminderMins(patch.breakReminderMins)
+          : s.breakReminderMins,
+      breakDurationMins:
+        patch.breakDurationMins !== undefined
+          ? clampDurationMins(patch.breakDurationMins)
+          : s.breakDurationMins,
+      breakLockEnabled:
+        patch.breakLockEnabled !== undefined ? patch.breakLockEnabled : s.breakLockEnabled,
+      breakStrictMode:
+        patch.breakStrictMode !== undefined ? patch.breakStrictMode : s.breakStrictMode,
+    };
+    saveBreakConfig(next);
+    const intervalChanged = next.breakReminderMins !== s.breakReminderMins;
+    set({
+      ...next,
+      ...(intervalChanged
+        ? {
+            breakNextDueAt:
+              next.breakReminderMins > 0
+                ? Date.now() + next.breakReminderMins * 60_000
+                : null,
+            breakPaused: false,
+            breakPausedRemainMs: 0,
+          }
+        : {}),
+    });
+  },
+
+  toggleBreakPaused: () => {
+    const s = get();
+    if (s.breakReminderMins <= 0) return;
+    if (s.breakPaused) {
+      const remain =
+        s.breakPausedRemainMs > 0
+          ? s.breakPausedRemainMs
+          : s.breakReminderMins * 60_000;
+      set({
+        breakPaused: false,
+        breakPausedRemainMs: 0,
+        breakNextDueAt: Date.now() + remain,
+      });
+    } else {
+      const remain = s.breakNextDueAt
+        ? Math.max(0, s.breakNextDueAt - Date.now())
+        : s.breakReminderMins * 60_000;
+      set({
+        breakPaused: true,
+        breakPausedRemainMs: remain,
+      });
     }
-    set({ breakReminderMins: mins });
+  },
+
+  resetBreakTimer: () => {
+    const s = get();
+    set({
+      breakPaused: false,
+      breakPausedRemainMs: 0,
+      breakNextDueAt:
+        s.breakReminderMins > 0 ? Date.now() + s.breakReminderMins * 60_000 : null,
+    });
+  },
+
+  triggerBreakNow: (customSeconds) => {
+    const s = get();
+    const total =
+      typeof customSeconds === "number" && customSeconds > 0
+        ? Math.round(customSeconds)
+        : clampDurationMins(s.breakDurationMins) * 60;
+    set({
+      breakActive: true,
+      breakSecondsLeft: total,
+      breakTotalSeconds: total,
+    });
+  },
+
+  snoozeBreak: (mins = 5) => {
+    const safeMins = Math.max(1, Math.min(60, Math.round(mins)));
+    set({
+      breakActive: false,
+      breakSecondsLeft: 0,
+      breakPaused: false,
+      breakPausedRemainMs: 0,
+      breakNextDueAt: Date.now() + safeMins * 60_000,
+    });
+  },
+
+  finishBreak: (completed) => {
+    const s = get();
+    let nextCompleted = s.breakCompletedToday;
+    if (completed) {
+      nextCompleted += 1;
+      saveBreakCompletedToday(nextCompleted);
+    }
+    set({
+      breakActive: false,
+      breakSecondsLeft: 0,
+      breakPaused: false,
+      breakPausedRemainMs: 0,
+      breakCompletedToday: nextCompleted,
+      breakNextDueAt:
+        s.breakReminderMins > 0 ? Date.now() + s.breakReminderMins * 60_000 : null,
+    });
+  },
+
+  tickBreak: () => {
+    const s = get();
+    if (!s.breakActive || s.breakSecondsLeft <= 0) return false;
+    const next = s.breakSecondsLeft - 1;
+    set({ breakSecondsLeft: next });
+    return next === 0;
   },
 }));
 

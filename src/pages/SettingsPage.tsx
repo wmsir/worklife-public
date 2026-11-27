@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  Coffee,
   Download,
   Eye,
   EyeOff,
@@ -10,9 +11,11 @@ import {
   Import,
   Info,
   Loader2,
+  Lock,
   RotateCcw,
   Save,
   ScrollText,
+  ShieldAlert,
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
@@ -31,7 +34,7 @@ import {
   formatWechatSampleText,
 } from "../lib/wechatTemplates";
 import { useAppStore } from "../store/appStore";
-import { useLogStore } from "../store/runtimeStore";
+import { useFocusStore, useLogStore } from "../store/runtimeStore";
 
 function cloneSettings(s: Settings): Settings {
   return JSON.parse(JSON.stringify(s)) as Settings;
@@ -68,6 +71,28 @@ export function SettingsPage() {
   const [resettingTpl, setResettingTpl] = useState(false);
   const [showSysIdPass, setShowSysIdPass] = useState(false);
   const [tplPreviewMode, setTplPreviewMode] = useState(true);
+
+  const {
+    breakReminderMins,
+    breakDurationMins,
+    breakLockEnabled,
+    breakStrictMode,
+    breakCompletedToday,
+    setBreakConfig,
+    resetBreakTimer,
+    triggerBreakNow,
+  } = useFocusStore(
+    useShallow((s) => ({
+      breakReminderMins: s.breakReminderMins,
+      breakDurationMins: s.breakDurationMins,
+      breakLockEnabled: s.breakLockEnabled,
+      breakStrictMode: s.breakStrictMode,
+      breakCompletedToday: s.breakCompletedToday,
+      setBreakConfig: s.setBreakConfig,
+      resetBreakTimer: s.resetBreakTimer,
+      triggerBreakNow: s.triggerBreakNow,
+    })),
+  );
 
   useEffect(() => {
     if (settings) {
@@ -441,6 +466,161 @@ export function SettingsPage() {
           </button>
         </div>
       </div>
+
+      {/* 强制定时休息锁屏设置 */}
+      <section className="rounded-2xl border border-teal-200/80 bg-white p-5 shadow-2xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-teal-50 text-teal-600">
+              <Coffee className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900">强制定时休息锁屏提醒</h2>
+              <p className="text-[11px] text-gray-500">
+                连续工作到达设定时间后自动弹出置顶全屏休息界面（提前 60 秒气泡预警，即时保存生效）。今日已完成休息{" "}
+                <strong className="text-teal-700">{breakCompletedToday}</strong> 次。
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                resetBreakTimer();
+                toast.info(
+                  breakReminderMins > 0
+                    ? `已重置计时：${breakReminderMins} 分钟后进入休息锁屏`
+                    : "当前未开启定时休息提醒",
+                );
+              }}
+              className="inline-flex items-center gap-1 rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>重置计时</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => triggerBreakNow()}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-teal-700"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              <span>立即进入休息锁屏</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <span className="block text-xs font-medium text-gray-700">
+              工作提醒周期（分钟，0=关闭）
+            </span>
+            <div className="mt-1.5 flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                max={240}
+                value={breakReminderMins}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  if (Number.isFinite(val)) {
+                    setBreakConfig({ breakReminderMins: val });
+                  }
+                }}
+                className="w-24 rounded-xl border border-gray-200 px-3 py-1.5 font-mono text-xs text-gray-800 focus:border-teal-500 focus:outline-none"
+              />
+              <div className="flex gap-1">
+                {[30, 45, 60].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setBreakConfig({ breakReminderMins: m })}
+                    className={`rounded-lg px-2 py-1 text-[11px] font-medium ${
+                      breakReminderMins === m
+                        ? "bg-teal-600 text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {m}m
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <span className="block text-xs font-medium text-gray-700">
+              每次休息时长（1~30 分钟）
+            </span>
+            <div className="mt-1.5 flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={30}
+                value={breakDurationMins}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  if (Number.isFinite(val) && val > 0) {
+                    setBreakConfig({ breakDurationMins: val });
+                  }
+                }}
+                className="w-24 rounded-xl border border-gray-200 px-3 py-1.5 font-mono text-xs text-gray-800 focus:border-teal-500 focus:outline-none"
+              />
+              <div className="flex gap-1">
+                {[3, 5, 10].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setBreakConfig({ breakDurationMins: m })}
+                    className={`rounded-lg px-2 py-1 text-[11px] font-medium ${
+                      breakDurationMins === m
+                        ? "bg-teal-600 text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {m}m
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs">
+            <input
+              type="checkbox"
+              checked={breakLockEnabled}
+              onChange={(e) => setBreakConfig({ breakLockEnabled: e.target.checked })}
+              className="mt-0.5 rounded border-gray-300 text-teal-600"
+            />
+            <div>
+              <div className="flex items-center gap-1 font-medium text-gray-800">
+                <Lock className="h-3.5 w-3.5 text-teal-600" />
+                <span>到期置顶全屏锁屏</span>
+              </div>
+              <p className="mt-0.5 text-[11px] text-gray-500">
+                关闭后仅在右上角弹出温和休息气泡提醒，不强制占满全屏。
+              </p>
+            </div>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs">
+            <input
+              type="checkbox"
+              checked={breakStrictMode}
+              onChange={(e) => setBreakConfig({ breakStrictMode: e.target.checked })}
+              className="mt-0.5 rounded border-gray-300 text-rose-600"
+            />
+            <div>
+              <div className="flex items-center gap-1 font-medium text-gray-800">
+                <ShieldAlert className="h-3.5 w-3.5 text-rose-500" />
+                <span>严格模式防误关</span>
+              </div>
+              <p className="mt-0.5 text-[11px] text-gray-500">
+                拦截 Esc 键，紧急情况需长按「紧急解锁」按钮 3 秒才能提前退出。
+              </p>
+            </div>
+          </label>
+        </div>
+      </section>
 
       {/* 本地数据根目录 */}
       <section className="rounded-2xl border border-gray-200 bg-white p-5">

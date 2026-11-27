@@ -1,4 +1,5 @@
 mod backup;
+mod break_lock;
 mod keep_alive;
 mod life;
 mod login;
@@ -23,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(sidecar::Sidecar::default())
+        .manage(break_lock::BreakLockState::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -329,6 +331,9 @@ pub fn run() {
             project_fs::project_fs_delete,
             project_fs::project_fs_open,
             keep_alive::keep_alive_mouse_nudge,
+            break_lock::enter_break_lock_window,
+            break_lock::exit_break_lock_window,
+            break_lock::lock_windows_workstation,
         ])
         .run(tauri::generate_context!())
         .expect("error while building LifeWork application");

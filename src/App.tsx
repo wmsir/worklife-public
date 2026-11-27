@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useRef } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { ConfirmDialogHost } from "./components/ConfirmDialog";
+import { BreakLockOverlay } from "./components/BreakLockOverlay";
 import { Layout } from "./components/Layout";
 import { api, onBackupDone, onLog } from "./lib/api";
 import { TodayPage } from "./pages/TodayPage";
@@ -224,6 +225,7 @@ export default function App() {
         </Routes>
       </Suspense>
       <ConfirmDialogHost />
+      <BreakLockOverlay />
     </>
   );
 }
