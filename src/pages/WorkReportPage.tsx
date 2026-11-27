@@ -19,11 +19,11 @@ import {
   Square,
   Trash2,
   Workflow,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import { DatePicker } from "../components/DatePicker";
+import { WorkloadDetailPanel } from "../components/WorkloadDetailPanel";
 import { api, wtCall } from "../lib/api";
 import { msToYmd } from "../lib/date";
 import { formatRelativeElapsed } from "../lib/lunar";
@@ -126,13 +126,15 @@ export function WorkReportPage() {
     row: WorkCheckItem;
   } | null>(null);
 
-  const [workloadModal, setWorkloadModal] = useState<{
+  const [workloadPanel, setWorkloadPanel] = useState<{
     row: WorkCheckItem;
     loading: boolean;
     own: unknown;
     actual: unknown;
+    detailRaw: unknown;
     error?: string;
   } | null>(null);
+  const workloadPanelRef = useRef<HTMLDivElement>(null);
 
   const planRef = useRef<DeclarePlanItem[]>(planRows);
   useEffect(() => {
@@ -209,19 +211,32 @@ export function WorkReportPage() {
   };
 
   const handleOpenWorkload = async (row: WorkCheckItem) => {
-    setWorkloadModal({ row, loading: true, own: null, actual: null });
+    setWorkloadPanel({
+      row,
+      loading: true,
+      own: null,
+      actual: null,
+      detailRaw: null,
+    });
+    window.setTimeout(() => {
+      workloadPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 60);
     try {
-      const [own, actual] = await Promise.all([
+      const [own, actual, detailRaw] = await Promise.all([
         wtCall("get_own_workload", { card_id: row.card_id }),
         wtCall("get_actual_report_hours", { card_id: row.card_id }),
+        wtCall("query_task_summary", { task_id: row.code || String(row.card_id) }).catch(
+          () => null,
+        ),
       ]);
-      setWorkloadModal({ row, loading: false, own, actual });
+      setWorkloadPanel({ row, loading: false, own, actual, detailRaw });
     } catch (e) {
-      setWorkloadModal({
+      setWorkloadPanel({
         row,
         loading: false,
         own: null,
         actual: null,
+        detailRaw: null,
         error: String(e),
       });
     }
@@ -839,12 +854,13 @@ export function WorkReportPage() {
                 >
                   需补(h)
                 </th>
+                <th className="px-3 py-2 text-center">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {checkRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-10 text-center text-gray-400">
+                  <td colSpan={11} className="py-10 text-center text-gray-400">
                     暂无工时查询结果，请点击上方「搜索工时情况」。
                   </td>
                 </tr>
@@ -962,6 +978,25 @@ export function WorkReportPage() {
                           </span>
                         )}
                       </td>
+                      <td
+                        className="whitespace-nowrap px-3 py-1.5 text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          disabled={!user}
+                          onClick={() => void handleOpenWorkload(row)}
+                          title="查看工作量明细（投入占比、人天拆解、代码行数）"
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition disabled:opacity-40 ${
+                            workloadPanel?.row.card_id === row.card_id
+                              ? "border-blue-300 bg-blue-50 text-blue-700"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50/70 hover:text-blue-700"
+                          }`}
+                        >
+                          <Eye className="h-3 w-3" />
+                          <span>明细</span>
+                        </button>
+                      </td>
                     </tr>
                   );
                 })
@@ -970,6 +1005,27 @@ export function WorkReportPage() {
           </table>
         </div>
       </section>
+
+      {/* 工作量明细可视化面板 */}
+      {workloadPanel && (
+        <div ref={workloadPanelRef}>
+          <WorkloadDetailPanel
+            cardCode={workloadPanel.row.code}
+            cardName={workloadPanel.row.name}
+            cardId={workloadPanel.row.card_id}
+            currentUserErp={declareErp}
+            loading={workloadPanel.loading}
+            error={workloadPanel.error}
+            own={workloadPanel.own}
+            actual={workloadPanel.actual}
+            detailRaw={workloadPanel.detailRaw}
+            fallbackDeclaredDays={Number(workloadPanel.row.declared ?? 0)}
+            fallbackRequiredDays={Number(workloadPanel.row.required ?? 0)}
+            onRefresh={() => void handleOpenWorkload(workloadPanel.row)}
+            onClose={() => setWorkloadPanel(null)}
+          />
+        </div>
+      )}
 
       {/* 生成提报计划控制栏 */}
       <section className="rounded-2xl border border-gray-200 bg-white p-4">
@@ -1289,71 +1345,6 @@ export function WorkReportPage() {
             <Eye className="h-3.5 w-3.5 text-blue-500" />
             <span>工作量明细</span>
           </button>
-        </div>
-      )}
-
-      {/* 工作量明细弹窗 */}
-      {workloadModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <div className="min-w-0">
-                <h3 className="truncate text-sm font-semibold text-gray-900">
-                  工作量明细 · {workloadModal.row.code}
-                </h3>
-                <p className="truncate text-xs text-gray-500">
-                  {workloadModal.row.name} (card_id: {workloadModal.row.card_id})
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setWorkloadModal(null)}
-                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {workloadModal.loading ? (
-              <div className="flex items-center justify-center gap-2 py-10 text-xs text-gray-500">
-                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                <span>正在查询个人工作量与实际填报明细...</span>
-              </div>
-            ) : workloadModal.error ? (
-              <div className="my-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                查询失败: {workloadModal.error}
-              </div>
-            ) : (
-              <div className="mt-4 grid max-h-[60vh] grid-cols-1 gap-4 overflow-y-auto md:grid-cols-2">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                  <div className="text-xs font-semibold text-gray-800">
-                    卡片角色工作量 (get_own_workload)
-                  </div>
-                  <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-white p-2.5 font-mono text-[11px] text-gray-700">
-                    {JSON.stringify(workloadModal.own, null, 2)}
-                  </pre>
-                </div>
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                  <div className="text-xs font-semibold text-gray-800">
-                    实际填报工时 (get_actual_report_hours)
-                  </div>
-                  <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-white p-2.5 font-mono text-[11px] text-gray-700">
-                    {JSON.stringify(workloadModal.actual, null, 2)}
-                  </pre>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setWorkloadModal(null)}
-                className="rounded-xl border border-gray-200 px-4 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              >
-                关闭
-              </button>
-            </div>
-          </div>
         </div>
       )}
     </div>
