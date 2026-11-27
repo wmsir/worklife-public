@@ -42,7 +42,7 @@ import {
   todayYmd,
 } from "../lib/date";
 import { getLunarAlmanac } from "../lib/lunar";
-import { isTaskEffectivelyDone } from "../lib/taskFilter";
+import { getTaskProgress, isTaskEffectivelyDone } from "../lib/taskFilter";
 import type { CnDayInfo, Todo } from "../lib/types";
 import { useAppStore } from "../store/appStore";
 
@@ -295,10 +295,12 @@ export function TodayPage() {
         "### 📌 在研任务进度",
         ...(activeTasks.length > 0
           ? activeTasks.map(
-              (tk) =>
-                `- **${tk.code}** ${tk.name || ""} [${tk.status}]${
+              (tk) => {
+                const pct = getTaskProgress(tk);
+                return `- **${tk.code}** ${tk.name || ""} [${tk.status}${pct > 0 ? ` · ${pct}%` : ""}]${
                   tk.releaseDate ? ` · 发版 ${tk.releaseDate}` : ""
-                }`,
+                }`;
+              },
             )
           : ["- 暂无进行中台账任务"]),
         "",
@@ -323,10 +325,12 @@ export function TodayPage() {
         ? [
             `三、进行中研发任务（${activeTasks.length} 项）`,
             ...activeTasks.map(
-              (tk, i) =>
-                `  ${i + 1}. [${tk.code}] ${tk.name || ""} (${tk.status}${
+              (tk, i) => {
+                const pct = getTaskProgress(tk);
+                return `  ${i + 1}. [${tk.code}] ${tk.name || ""} (${tk.status}${pct > 0 ? ` ${pct}%` : ""}${
                   tk.releaseDate ? `, 发版 ${tk.releaseDate}` : ""
-                })`,
+                })`;
+              },
             ),
           ]
         : []),

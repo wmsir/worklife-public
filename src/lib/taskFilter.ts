@@ -16,6 +16,14 @@ export function isTaskEffectivelyDone(t: TaskRecord, today = todayYmd()): boolea
 }
 
 /**
+ * 获取任务进度百分比（0~100）；已发版/已关闭固定返回 100
+ */
+export function getTaskProgress(t: TaskRecord): number {
+  if (t.status === "已发版" || t.status === "已关闭") return 100;
+  return Math.max(0, Math.min(100, Math.round(Number(t.progress ?? 0) || 0)));
+}
+
+/**
  * 判断任务是否落在指定日期范围 [startDate, endDate] 内：
  * - 若任务配有任意排期日期（startDate / planTestDate / releaseDate），按日期点或跨度重叠判断，不再被 updatedAt 干扰；
  * - 若任务完全没有排期日期，才退回到 updatedAt 或进行中状态。

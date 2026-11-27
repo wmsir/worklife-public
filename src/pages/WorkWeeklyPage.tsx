@@ -29,7 +29,7 @@ import {
   todayYmd,
   weekRangeYmd,
 } from "../lib/date";
-import { isTaskInDateRange, isTaskPastRelease } from "../lib/taskFilter";
+import { getTaskProgress, isTaskInDateRange, isTaskPastRelease } from "../lib/taskFilter";
 import type { WeeklyReportSummary } from "../lib/types";
 import { sendWechat } from "../lib/wtx";
 import { useAppStore } from "../store/appStore";
@@ -305,7 +305,11 @@ export function WorkWeeklyPage() {
         }
         lines.push("", "## 今日/进行中事项");
         for (const tk of matchedTasks.filter((t) => t.status !== "已发版" && t.status !== "已提测")) {
-          lines.push(`- [${tk.code}] ${tk.name}${tk.planTestDate ? `（计划提测 ${tk.planTestDate}）` : ""}`);
+          const pct = getTaskProgress(tk);
+          const pctTxt = pct > 0 ? ` · 进度 ${pct}%` : "";
+          lines.push(
+            `- [${tk.code}] ${tk.name}${pctTxt}${tk.planTestDate ? `（计划提测 ${tk.planTestDate}）` : ""}`,
+          );
         }
         for (const td of inProgressTodos.slice(0, 8)) {
           lines.push(`- ${td.title}`);
@@ -320,9 +324,14 @@ export function WorkWeeklyPage() {
             const dates: string[] = [];
             if (tk.planTestDate) dates.push(`计划提测: ${tk.planTestDate}`);
             if (tk.releaseDate) dates.push(`发版日期: ${tk.releaseDate}`);
+            const pct = getTaskProgress(tk);
+            const progTxt =
+              !isTaskPastRelease(tk, today) && tk.status !== "已发版" && pct > 0
+                ? ` | 进度: ${pct}%`
+                : "";
             const repoTxt = tk.repos.length > 0 ? ` | 仓库: ${tk.repos.join(", ")}` : "";
             const dateTxt = dates.length > 0 ? ` | ${dates.join(" · ")}` : "";
-            lines.push(`- **[${tk.status}] ${tk.code} ${tk.name}**${dateTxt}${repoTxt}`);
+            lines.push(`- **[${tk.status}] ${tk.code} ${tk.name}**${progTxt}${dateTxt}${repoTxt}`);
             const notes = mdSummaries.get(tk.code);
             if (notes && notes.length > 0) {
               for (const n of notes) {

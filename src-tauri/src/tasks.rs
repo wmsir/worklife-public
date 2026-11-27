@@ -72,6 +72,8 @@ pub struct TaskRecord {
     #[serde(default = "default_status")]
     pub status: String,
     #[serde(default)]
+    pub progress: u8,
+    #[serde(default)]
     pub repos: Vec<String>,
     #[serde(default)]
     pub branch: String,
@@ -692,6 +694,7 @@ fn read_or_init_task_json(dir: &Path, folder_name: &str) -> Result<TaskRecord, S
         release_date: String::new(),
         plan_test_date: String::new(),
         status: "进行中".to_string(),
+        progress: 0,
         repos: Vec::new(),
         branch: String::new(),
         branches: Vec::new(),
@@ -782,6 +785,7 @@ pub fn tasks_sync_in_root(root: &Path, items: Vec<TaskSyncItem>) -> Result<Tasks
                     rec.release_date = in_sp_end;
                     if is_pending_release_confirmation(&rec, &today) {
                         rec.status = "已发版".to_string();
+                        rec.progress = 100;
                         rec.history.push(TaskHistoryItem {
                             at: now.clone(),
                             event: "发版日期早于当前日期，自动标为已发版".to_string(),
@@ -830,6 +834,11 @@ pub fn tasks_sync_in_root(root: &Path, items: Vec<TaskSyncItem>) -> Result<Tasks
             } else {
                 ("进行中".to_string(), "创建".to_string())
             };
+            let progress = if status == "已发版" || status == "已关闭" {
+                100
+            } else {
+                0
+            };
 
             let rec = TaskRecord {
                 code: code.clone(),
@@ -842,6 +851,7 @@ pub fn tasks_sync_in_root(root: &Path, items: Vec<TaskSyncItem>) -> Result<Tasks
                 release_date,
                 plan_test_date: in_plan_test,
                 status,
+                progress,
                 repos: Vec::new(),
                 branch: String::new(),
                 branches: Vec::new(),
@@ -897,6 +907,10 @@ pub fn task_update_in_root(
         .and_then(|v| v.as_str())
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
+    let explicit_progress = obj
+        .get("progress")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.min(100) as u8);
 
     if let Some(v) = obj.get("startDate").and_then(|v| v.as_str()) {
         rec.start_date = v.trim().to_string();
@@ -914,6 +928,9 @@ pub fn task_update_in_root(
             });
             if !explicit_status && is_pending_release_confirmation(&rec, &today) {
                 rec.status = "已发版".to_string();
+                if explicit_progress.is_none() {
+                    rec.progress = 100;
+                }
                 rec.history.push(TaskHistoryItem {
                     at: now.clone(),
                     event: "发版日期早于当前日期，自动标为已发版".to_string(),
@@ -928,9 +945,25 @@ pub fn task_update_in_root(
         let new_val = v.trim().to_string();
         if new_val != rec.status && !new_val.is_empty() {
             rec.status = new_val.clone();
+            if explicit_progress.is_none() {
+                if new_val == "已发版" || new_val == "已关闭" {
+                    rec.progress = 100;
+                } else if new_val == "未开始" {
+                    rec.progress = 0;
+                }
+            }
             rec.history.push(TaskHistoryItem {
                 at: now.clone(),
                 event: format!("状态变更为 {new_val}"),
+            });
+        }
+    }
+    if let Some(p) = explicit_progress {
+        if p != rec.progress {
+            rec.progress = p;
+            rec.history.push(TaskHistoryItem {
+                at: now.clone(),
+                event: format!("进度更新为 {p}%"),
             });
         }
     }
@@ -1155,6 +1188,7 @@ pub fn tasks_confirm_released_in_root(
         };
         if matched {
             rec.status = "已发版".to_string();
+            rec.progress = 100;
             rec.history.push(TaskHistoryItem {
                 at: now.clone(),
                 event: "一键确认已发版".to_string(),
@@ -1961,5 +1995,58 @@ mod tests {
         .unwrap();
         let sql_after = task_read_workspace_file_in_root(root, "TASK-8888", &sql_doc.rel_path).unwrap();
         assert_eq!(sql_after, "SELECT 42;\n");
+    }
+
+    #[test]
+    fn test_task_progress_clamp_and_status_sync() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        let synced = tasks_sync_in_root(
+            root,
+            vec![TaskSyncItem {
+                code: "TASK-7777".into(),
+                card_id: Some(7777),
+                name: Some("进度滑块测试".into()),
+                sprint: None,
+                sprint_start: None,
+                sprint_end: None,
+                plan_test_date: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(synced.tasks[0].progress, 0);
+
+        let updated = task_update_in_root(root, "TASK-7777", json!({ "progress": 65 })).unwrap();
+        assert_eq!(updated.progress, 65);
+        assert!(updated.history.iter().any(|h| h.event == "进度更新为 65%"));
+
+        let clamped = task_update_in_root(root, "TASK-7777", json!({ "progress": 150 })).unwrap();
+        assert_eq!(clamped.progress, 100);
+
+        let done = task_update_in_root(root, "TASK-7777", json!({ "status": "已发版" })).unwrap();
+        assert_eq!(done.progress, 100);
+
+        let legacy_json = r#"{
+            "code": "TASK-OLD",
+            "name": "Legacy Task",
+            "sprint": "",
+            "sprintStart": "",
+            "sprintEnd": "",
+            "startDate": "2026-11-01",
+            "releaseDate": "",
+            "planTestDate": "",
+            "status": "进行中",
+            "repos": [],
+            "branch": "",
+            "tags": [],
+            "notes": "",
+            "folderName": "TASK-OLD",
+            "createdAt": "2026-11-01T00:00:00",
+            "updatedAt": "2026-11-01T00:00:00",
+            "history": []
+        }"#;
+        let legacy: TaskRecord = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(legacy.progress, 0);
     }
 }

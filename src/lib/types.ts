@@ -265,6 +265,7 @@ export interface TaskRecord {
   releaseDate: string;
   planTestDate: string;
   status: TaskStatus;
+  progress?: number;
   repos: string[];
   branch: string;
   branches?: TaskBranchRecord[];

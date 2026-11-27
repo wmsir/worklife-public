@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.0"
+version = "0.2.1"
 description = "LifeWork 工作与生活管理桌面软件"
 authors = ["meng"]
 license = ""

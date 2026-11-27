@@ -17,7 +17,10 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import { TencentDocPushModal } from "../components/TencentDocPushModal";
+import { TaskProgressSlider } from "../components/TaskProgressSlider";
 import { api } from "../lib/api";
+import { todayYmd } from "../lib/date";
+import { getTaskProgress, isTaskEffectivelyDone } from "../lib/taskFilter";
 import type { TaskWorkspaceDoc } from "../lib/types";
 import { getTaskBranches, shortRepoName } from "../lib/wtx";
 import { useAppStore } from "../store/appStore";
@@ -186,13 +189,30 @@ export function TaskMdPage() {
               )}
             </div>
             {task && (
-              <div className="mt-0.5 flex flex-wrap items-center gap-3 text-[11px] text-gray-500">
+              <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-gray-500">
                 <span>迭代: {task.sprint || "-"}</span>
                 <span>开始: {task.startDate || "-"}</span>
                 <span>提测: {task.planTestDate || "-"}</span>
                 <span>发版: {task.releaseDate || "-"}</span>
                 <span>状态: {task.status}</span>
                 <span>分支: {task.branch || "-"}</span>
+                <div className="flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-slate-50/70 px-2 py-0.5">
+                  <span className="text-[11px] font-medium text-slate-600">进度</span>
+                  <TaskProgressSlider
+                    value={getTaskProgress(task)}
+                    disabled={isTaskEffectivelyDone(task, todayYmd())}
+                    compact
+                    onCommit={(val) => {
+                      const patch =
+                        task.status === "未开始" && val > 0
+                          ? { progress: val, status: "进行中" as const }
+                          : { progress: val };
+                      void taskUpdate(code, patch)
+                        .then(() => toast.success(`已更新 [${code}] 进度为 ${val}%`))
+                        .catch((err) => toast.error(`更新进度失败: ${err}`));
+                    }}
+                  />
+                </div>
               </div>
             )}
           </div>

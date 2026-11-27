@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import { DateBadge } from "../components/DateBadge";
+import { TaskProgressSlider } from "../components/TaskProgressSlider";
 import { api } from "../lib/api";
 import {
   addDaysYmd,
@@ -34,16 +35,17 @@ import {
   todayYmd,
   weekRangeYmd,
 } from "../lib/date";
-import { isTaskEffectivelyDone } from "../lib/taskFilter";
+import { getTaskProgress, isTaskEffectivelyDone } from "../lib/taskFilter";
 import { useAppStore } from "../store/appStore";
 
 export function WorkOverviewPage() {
-  const { todos, tasks, user, setUser } = useAppStore(
+  const { todos, tasks, user, setUser, taskUpdate } = useAppStore(
     useShallow((s) => ({
       todos: s.todos,
       tasks: s.tasks,
       user: s.user,
       setUser: s.setUser,
+      taskUpdate: s.taskUpdate,
     })),
   );
   const [syncingProfile, setSyncingProfile] = useState(false);
@@ -561,17 +563,41 @@ export function WorkOverviewPage() {
           ) : (
             <div className="space-y-2">
               {upcomingReleases.map((t) => (
-                <Link
+                <div
                   key={t.code}
-                  to={`/work/task/${encodeURIComponent(t.code)}`}
-                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 px-3 py-2 text-xs transition-colors hover:border-blue-200 hover:bg-blue-50/40"
+                  className="rounded-xl border border-slate-100 px-3 py-2 text-xs transition-colors hover:border-blue-200 hover:bg-blue-50/40"
                 >
-                  <div className="min-w-0">
-                    <div className="font-mono font-medium text-blue-600">{t.code}</div>
-                    <div className="truncate text-slate-700">{t.name}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <Link
+                      to={`/work/task/${encodeURIComponent(t.code)}`}
+                      className="min-w-0 flex-1"
+                    >
+                      <div className="font-mono font-medium text-blue-600 hover:underline">
+                        {t.code}
+                      </div>
+                      <div className="truncate text-slate-700">{t.name}</div>
+                    </Link>
+                    <DateBadge date={t.releaseDate} showWeekday showIcon={false} />
                   </div>
-                  <DateBadge date={t.releaseDate} showWeekday showIcon={false} />
-                </Link>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-slate-100/80 pt-1.5">
+                    <span className="text-[10px] text-slate-400">
+                      {t.status} · 拖动调整进度
+                    </span>
+                    <TaskProgressSlider
+                      value={getTaskProgress(t)}
+                      compact
+                      onCommit={(val) => {
+                        const patch =
+                          t.status === "未开始" && val > 0
+                            ? { progress: val, status: "进行中" as const }
+                            : { progress: val };
+                        void taskUpdate(t.code, patch)
+                          .then(() => toast.success(`已更新 [${t.code}] 进度为 ${val}%`))
+                          .catch((err) => toast.error(`更新进度失败: ${err}`));
+                      }}
+                    />
+                  </div>
+                </div>
               ))}
             </div>
           )}

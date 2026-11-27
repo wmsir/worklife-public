@@ -27,10 +27,11 @@ import { useShallow } from "zustand/react/shallow";
 import { ApplyTemplateModal } from "../components/ApplyTemplateModal";
 import { DateBadge } from "../components/DateBadge";
 import { DatePicker, MonthPicker } from "../components/DatePicker";
+import { TaskProgressSlider } from "../components/TaskProgressSlider";
 import { SegmentedTabs } from "../components/UiKit";
 import { api } from "../lib/api";
 import { formatMonthZh, isValidYmd, todayYmd } from "../lib/date";
-import { isTaskEffectivelyDone } from "../lib/taskFilter";
+import { getTaskProgress, isTaskEffectivelyDone } from "../lib/taskFilter";
 import { getTaskBranches, shortRepoName } from "../lib/wtx";
 import type {
   SmartsheetWebhookProfile,
@@ -288,6 +289,14 @@ export function WorkLedgerPage() {
     } catch (err) {
       toast.error(`更新失败: ${err}`);
     }
+  };
+
+  const handleProgressCommit = (t: TaskRecord, nextProgress: number) => {
+    const patch: Partial<TaskRecord> =
+      t.status === "未开始" && nextProgress > 0
+        ? { progress: nextProgress, status: "进行中" }
+        : { progress: nextProgress };
+    void handlePatch(t.code, patch);
   };
 
   const handleConfirmSingleRelease = async (code: string) => {
@@ -632,6 +641,7 @@ export function WorkLedgerPage() {
                 <th className="px-3.5 py-3 font-medium">发版日期</th>
                 <th className="px-3.5 py-3 font-medium">计划提测</th>
                 <th className="px-3.5 py-3 font-medium">状态</th>
+                <th className="px-3.5 py-3 font-medium">进度</th>
                 <th className="px-3.5 py-3 text-right font-medium">操作</th>
               </tr>
             </thead>
@@ -889,6 +899,14 @@ export function WorkLedgerPage() {
                       ))}
                     </select>
                   </td>
+                  <td className="px-3.5 py-2.5">
+                    <TaskProgressSlider
+                      value={getTaskProgress(t)}
+                      disabled={isTaskEffectivelyDone(t, today)}
+                      compact
+                      onCommit={(val) => handleProgressCommit(t, val)}
+                    />
+                  </td>
                   <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-1">
                       <button
@@ -962,7 +980,7 @@ export function WorkLedgerPage() {
               })}
               {filteredTasks.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={11} className="px-4 py-12 text-center text-gray-400">
                     暂无任务台账记录。可点击右上角「新建任务」，或在「填报与检查」中搜索工时自动同步建立文件夹。
                   </td>
                 </tr>
@@ -1069,7 +1087,16 @@ export function WorkLedgerPage() {
                           </button>
                         )}
                       </div>
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-slate-500">
+                      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-slate-200/70 pt-2">
+                        <span className="text-[10px] text-slate-500">进度</span>
+                        <TaskProgressSlider
+                          value={getTaskProgress(t)}
+                          disabled={isTaskEffectivelyDone(t, today)}
+                          compact
+                          onCommit={(val) => handleProgressCommit(t, val)}
+                        />
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-slate-500">
                         <span className="inline-flex items-center gap-1">
                           <span>开始:</span>
                           <DateBadge date={t.startDate} showRelative={false} showIcon={false} emptyLabel="未设" />

@@ -565,6 +565,7 @@ pub fn project_fs_create_task_in_root(
         release_date: String::new(),
         plan_test_date: String::new(),
         status: "进行中".to_string(),
+        progress: 0,
         repos: Vec::new(),
         branch: String::new(),
         branches: Vec::new(),
